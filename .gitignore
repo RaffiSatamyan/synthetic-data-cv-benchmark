@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Data and generated artifacts
+data/raw/
+data/processed/
+generated/
+outputs/
+checkpoints/
+wandb/
+*.ckpt
+*.pt
+*.pth
+
+# Local configuration and secrets
+.env
+.env.*
+secrets/
+
+# OS and editors
+.DS_Store
+.idea/
+.vscode/
+
+# Generated manifests and result exports
+manifests/*.csv
+results/*.csv
+results/*.json
+!results/README.md
