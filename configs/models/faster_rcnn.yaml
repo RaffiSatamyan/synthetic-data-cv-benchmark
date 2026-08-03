@@ -1,0 +1,5 @@
+name: fasterrcnn_resnet50_fpn
+task: detection
+pretrained: true
+weights: DEFAULT
+num_classes: 21

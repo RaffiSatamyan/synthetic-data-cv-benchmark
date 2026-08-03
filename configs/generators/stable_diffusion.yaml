@@ -1,0 +1,13 @@
+name: stable_diffusion
+type: diffusion
+enabled: true
+model_id: stabilityai/stable-diffusion-2-1
+revision: REPLACE_WITH_EXACT_REVISION
+checkpoint: null
+generation:
+  num_steps: 30
+  guidance_scale: 7.5
+  batch_size: 8
+  precision: fp16
+prompt_template: "a realistic photo of a {class_name}"
+negative_prompt: "blurry, distorted, low quality"

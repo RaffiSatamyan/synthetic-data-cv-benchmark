@@ -1,0 +1,7 @@
+name: classical_augmentation
+type: baseline
+enabled: false
+augmentations:
+  horizontal_flip: true
+  random_crop: true
+  color_jitter: true

@@ -1,0 +1,10 @@
+name: cityscapes
+task: segmentation
+num_classes: 19
+ignore_index: 255
+root: data/cityscapes
+splits:
+  train: splits/10pct/train.csv
+  val: splits/val.csv
+  test: splits/test.csv
+primary_metric: mean_iou

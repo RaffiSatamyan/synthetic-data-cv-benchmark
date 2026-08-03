@@ -1,0 +1,14 @@
+epochs: 100
+batch_size: 64
+learning_rate: 0.001
+weight_decay: 0.0001
+num_workers: 4
+mixed_precision: true
+seed: 42
+checkpoint:
+  save_best: true
+  save_last: true
+  mode: max
+logging:
+  use_wandb: false
+  log_every_steps: 20

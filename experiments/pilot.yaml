@@ -1,0 +1,18 @@
+datasets:
+  - name: cifar10
+    model: resnet18
+  - name: voc_detection
+    model: fasterrcnn_resnet50_fpn
+  - name: cityscapes
+    model: deeplabv3_resnet50
+
+real_fractions: [0.10, 1.0]
+seeds: [0]
+
+baselines:
+  - real_only
+  - classical_augmentation
+
+synthetic:
+  generators: [stable_diffusion]
+  ratios: [1.0]

@@ -1,0 +1,5 @@
+name: deeplabv3_resnet50
+task: segmentation
+pretrained: true
+weights: DEFAULT
+num_classes: 19

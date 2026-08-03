@@ -1,0 +1,9 @@
+name: cifar10
+task: classification
+num_classes: 10
+root: data/cifar10
+splits:
+  train: splits/10pct/train.csv
+  val: splits/val.csv
+  test: splits/test.csv
+primary_metric: accuracy

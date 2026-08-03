@@ -4,19 +4,38 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "synthetic-data-cv-benchmark"
-version = "0.1.0"
-description = "Reproducible benchmark for synthetic image data in computer vision"
+version = "0.2.0"
+description = "Compact reproducible benchmark for synthetic image data in computer vision"
+readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
   "pandas>=2.0",
-  "pyyaml>=6.0",
+  "PyYAML>=6.0",
+  "Pillow>=10.0",
 ]
 
 [project.optional-dependencies]
+training = [
+  "torch>=2.2",
+  "torchvision>=0.17",
+]
+generation = [
+  "torch>=2.2",
+  "diffusers>=0.30",
+  "transformers>=4.40",
+  "accelerate>=0.30",
+  "safetensors>=0.4",
+]
+tracking = [
+  "wandb>=0.17",
+]
 dev = [
   "pytest>=8.0",
   "ruff>=0.6",
 ]
+
+[project.scripts]
+synthbench-build-grid = "synthbench.experiments:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -27,3 +46,4 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
+target-version = "py310"

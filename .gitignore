@@ -1,33 +1,37 @@
 # Python
 __pycache__/
 *.py[cod]
-.venv/
 .pytest_cache/
 .ruff_cache/
+.venv/
+dist/
+build/
+*.egg-info/
 
-# Data and generated artifacts
-data/raw/
-data/processed/
-generated/
-outputs/
-checkpoints/
-wandb/
-*.ckpt
-*.pt
-*.pth
-
-# Local configuration and secrets
+# Secrets and local settings
 .env
-.env.*
-secrets/
+*.local.yaml
 
-# OS and editors
-.DS_Store
-.idea/
-.vscode/
+# Experiment tracking
+wandb/
+mlruns/
 
-# Generated manifests and result exports
-manifests/*.csv
-results/*.csv
-results/*.json
-!results/README.md
+# Raw and generated images/annotations
+data/*/raw/*
+!data/*/raw/.gitkeep
+data/*/synthetic/*/*/images/*
+data/*/synthetic/*/*/annotations/*
+
+# Large checkpoints
+checkpoints/**/*.pt
+checkpoints/**/*.pth
+checkpoints/**/*.ckpt
+checkpoints/**/*.safetensors
+
+# Per-run artifacts
+outputs/*
+!outputs/README.md
+
+# Temporary aggregate files
+results/**/*.tmp
+results/**/*.parquet
