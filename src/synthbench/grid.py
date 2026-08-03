@@ -31,12 +31,15 @@ def build_grid(preset: str) -> list[dict]:
     rows: list[dict] = []
     for task, dataset in datasets:
         for fraction, seed in product(fractions, seeds):
-            rows.append({"task": task, "dataset": dataset, "real_fraction": fraction, "seed": seed,
-                         "regime": "real_only", "generator": "none", "synthetic_ratio": 0.0})
-            rows.append({"task": task, "dataset": dataset, "real_fraction": fraction, "seed": seed,
-                         "regime": "classical_augmentation", "generator": "none", "synthetic_ratio": 0.0})
+            baselines = ["real_only", "classical_augmentation"]
+            if preset == "full":
+                baselines.append("strong_augmentation")
+            for regime in baselines:
+                rows.append({"task": task, "dataset": dataset, "real_fraction": fraction,
+                             "seed": seed, "regime": regime, "generator": "none",
+                             "synthetic_ratio": 0.0})
             for generator, ratio in product(generators, ratios):
-                rows.append({"task": task, "dataset": dataset, "real_fraction": fraction, "seed": seed,
-                             "regime": "synthetic", "generator": generator, "synthetic_ratio": ratio})
-
+                rows.append({"task": task, "dataset": dataset, "real_fraction": fraction,
+                             "seed": seed, "regime": "synthetic", "generator": generator,
+                             "synthetic_ratio": ratio})
     return rows
