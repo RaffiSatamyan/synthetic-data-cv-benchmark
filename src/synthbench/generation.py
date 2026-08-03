@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import csv
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from PIL import Image
 
@@ -102,7 +103,7 @@ def generate_dataset(
                         prompt=request.prompt,
                         image_sha256=sha256_file(image_path),
                     )
-                except Exception as error:
+                except Exception as error:  # noqa: BLE001 - preserve failures in provenance
                     sample = GeneratedSample(
                         sample_id=request.sample_id,
                         image_path="",

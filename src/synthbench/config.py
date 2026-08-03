@@ -15,7 +15,7 @@ def load_yaml(path: str | Path) -> dict[str, Any]:
     with path.open(encoding="utf-8") as handle:
         value = yaml.safe_load(handle) or {}
     if not isinstance(value, dict):
-        raise ValueError(f"{path} must contain a YAML mapping")
+        raise TypeError(f"{path} must contain a YAML mapping")
     return _resolve_environment(value)
 
 

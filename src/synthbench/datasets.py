@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 import pandas as pd
 
@@ -42,7 +42,7 @@ def create_nested_subsets(
     label_column: str | None = None,
 ) -> dict[float, pd.DataFrame]:
     """Create deterministic nested subsets; stratify approximately when labels exist."""
-    fractions = sorted(set(float(value) for value in fractions))
+    fractions = sorted({float(value) for value in fractions})
     if not fractions or fractions[-1] != 1.0:
         raise ValueError("fractions must include 1.0")
     if fractions[0] <= 0 or fractions[-1] > 1:

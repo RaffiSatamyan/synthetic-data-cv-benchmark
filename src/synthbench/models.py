@@ -6,7 +6,7 @@ from typing import Any
 def build_model(config: dict[str, Any]):
     """Build a torchvision downstream model from a compact model config."""
     try:
-        import torch.nn as nn
+        from torch import nn
         from torchvision.models import ResNet18_Weights, resnet18
         from torchvision.models.detection import (
             FasterRCNN_ResNet50_FPN_Weights,
