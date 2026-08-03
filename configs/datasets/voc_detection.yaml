@@ -1,0 +1,9 @@
+name: voc_detection
+task: detection
+num_classes: 21
+root: data/voc_detection
+splits:
+  train: splits/10pct/train.csv
+  val: splits/val.csv
+  test: splits/test.csv
+primary_metric: map

@@ -1,0 +1,5 @@
+name: resnet18
+task: classification
+pretrained: true
+weights: DEFAULT
+num_classes: 10

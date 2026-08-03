@@ -1,0 +1,10 @@
+name: stylegan2
+type: gan
+enabled: true
+model_id: local
+revision: null
+checkpoint: checkpoints/generators/stylegan2/REPLACE_WITH_CHECKPOINT.pt
+generation:
+  batch_size: 64
+  truncation_psi: 0.7
+  precision: fp32

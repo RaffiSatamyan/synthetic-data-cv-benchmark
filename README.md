@@ -1,105 +1,240 @@
-# Synthetic Data for Computer Vision: A Reproducible Benchmark
+# Synthetic Data CV Benchmark
 
-This repository supports a benchmark paper studying **when synthetic images improve downstream computer-vision performance** across classification, object detection, and semantic segmentation.
+A compact, reproducible research repository for studying when synthetic images improve computer-vision models.
 
-The benchmark varies:
+The benchmark compares real data only, classical augmentation, and multiple synthetic-image generators across different real-data sizes, synthetic-to-real ratios, seeds, and computer-vision tasks.
 
-- downstream task and dataset;
-- amount of available real training data;
-- synthetic-data generation method;
-- synthetic-to-real data ratio;
-- random seed.
+This repository is intentionally small. Each file has one clear responsibility, while datasets, generated images, and checkpoints stay outside Git.
 
-## Core research questions
-
-1. How does the value of synthetic data change as real-data availability changes?
-2. Which generation families transfer best to classification, detection, and segmentation?
-3. How much synthetic data is useful before performance saturates or decreases?
-4. Do image-quality metrics predict downstream utility?
-5. How robust are conclusions across datasets, architectures, and random seeds?
-
-## Repository layout
+## Repository structure
 
 ```text
-configs/                 Experiment definitions
-  generators/            Generator-family configurations
-  tasks/                 Task and dataset configurations
-data/README.md            Dataset placement and preparation rules
-docs/                     Experimental protocol and reporting rules
-paper/                    Tables, figures, and manuscript-facing assets
-results/                  Result schema and aggregated outputs
-scripts/                  Command-line entry points
-src/synthbench/           Grid construction and experiment utilities
-tests/                    Reproducibility checks
-.github/workflows/        Continuous integration
+.
+├── configs/                 Reusable dataset, generator, model, and training settings
+├── experiments/             Experiment grids: which combinations should be executed
+├── src/synthbench/          Reusable Python implementation
+├── scripts/                 Thin command-line entry points
+├── data/                    Dataset-centered real splits and synthetic datasets
+├── checkpoints/             Reusable generator and teacher checkpoints
+├── outputs/                 One directory per downstream training run
+├── results/                 Aggregated paper results, figures, and tables
+├── tests/                   Fast correctness and smoke tests
+└── .github/workflows/       Continuous integration
 ```
 
-## Experiment counts
+## Data organization
 
-The repository intentionally defines two grids:
+Every dataset should use this layout:
 
-- **Pilot grid: 18 runs** — one representative dataset per task, two real-data fractions, and three regimes.
-- **Full grid: 864 runs** — six task/dataset combinations, four real-data fractions, three seeds, three non-synthetic baselines/augmentation regimes, and nine synthetic regimes.
+```text
+data/<dataset_name>/
+├── raw/                     Original real data; treat as read-only
+├── splits/
+│   ├── full/train.csv       Full real training split
+│   ├── 1pct/train.csv       Fixed 1% subset
+│   ├── 3pct/train.csv       Fixed 3% subset
+│   ├── 10pct/train.csv      Fixed 10% subset
+│   ├── val.csv              Validation set for model/checkpoint selection
+│   └── test.csv             Untouched real test set
+└── synthetic/
+    └── <generator>/
+        └── <generation_id>/
+            ├── images/      Generated images
+            ├── annotations/ Boxes or masks when needed
+            ├── manifest.csv One row per generated sample
+            └── config.yaml  Exact generation settings
+```
 
-The full grid is deduplicated: real-only and classical-augmentation baselines are not repeated for every synthetic ratio or generator.
+The percentage folders contain CSV manifests, not copied images. Whenever possible, use nested subsets:
 
-## Setup
+```text
+1% subset ⊂ 3% subset ⊂ 10% subset ⊂ full training set
+```
+
+## Responsibilities
+
+### `configs/`
+
+Reusable component settings. These files describe one dataset, generator, model, or the shared training procedure. They contain settings, not training logic.
+
+- `configs/datasets/*.yaml`: task, paths, number of classes, split locations, and primary metric.
+- `configs/generators/*.yaml`: generator name, exact model revision/checkpoint, prompts, and inference parameters.
+- `configs/models/*.yaml`: downstream architecture and initialization.
+- `configs/training.yaml`: epochs, optimizer, batch size, checkpointing, logging, and seed settings.
+
+### `experiments/`
+
+Defines which combinations should run.
+
+- `pilot.yaml`: small 18-run grid for testing the full pipeline.
+- `full.yaml`: larger 288-run benchmark grid.
+- `paper_runs.csv`: frozen list of runs included in the final paper. Do not silently regenerate it after results are finalized.
+
+### `src/synthbench/`
+
+Reusable implementation:
+
+- `config.py`: reads and validates YAML and builds resolved run configurations.
+- `datasets.py`: loads manifests, checks data leakage, creates nested subsets, and mixes real/synthetic samples.
+- `generation.py`: common generator interface, resumable generation loop, image saving, and provenance manifests.
+- `annotation.py`: assigns classification labels or creates teacher boxes/masks.
+- `filtering.py`: marks corrupt, duplicate, empty, or low-confidence synthetic samples and records reasons.
+- `models.py`: builds downstream models. Model weights do not belong in this file.
+- `training.py`: run directories, checkpoint format, resume logic, and task-training entry point.
+- `evaluation.py`: task metrics and validation-selected checkpoint evaluation.
+- `experiments.py`: deduplicated grids, deterministic run IDs, and CSV manifests.
+- `utils.py`: seeds, hashes, atomic writes, and environment metadata.
+
+### `scripts/`
+
+Thin command-line wrappers. Reusable logic belongs in `src/synthbench/`.
+
+- `prepare_data.py`: validates a source manifest and creates full/1%/3%/10%/validation/test manifests.
+- `generate.py`: generates one synthetic dataset and writes its provenance manifest.
+- `train.py`: resolves one experiment row and starts downstream training.
+- `evaluate.py`: evaluates one completed run using `best.pt`.
+- `aggregate.py`: combines `outputs/*/metrics.json` into paper-level CSV files.
+
+### `checkpoints/`
+
+Reusable weights only:
+
+- `generators/`: locally trained GANs, diffusion LoRAs, or other generator weights.
+- `teachers/`: frozen detector/segmenter weights used to annotate synthetic data.
+
+Downstream run checkpoints belong in `outputs/<run_id>/`, not here.
+
+### `outputs/`
+
+Each run writes:
+
+```text
+outputs/<run_id>/
+├── config.yaml              Fully resolved configuration actually used
+├── environment.json         Python, PyTorch, CUDA, and GPU information
+├── status.json              created/running/completed/failed
+├── best.pt                  Best validation checkpoint
+├── last.pt                  Latest checkpoint for resuming
+├── metrics.json             Final validation/test metrics and resource usage
+├── predictions.csv          Optional sample-level predictions
+└── train.log                Human-readable log
+```
+
+`best.pt` must be selected only with validation performance. Test performance must never choose checkpoints or hyperparameters.
+
+### `results/`
+
+Paper-level outputs:
+
+- `all_runs.csv`: one row per completed run.
+- `summary.csv`: means and standard deviations across seeds.
+- `figures/`: plots produced from aggregated results.
+- `tables/`: CSV or LaTeX tables produced from aggregated results.
+
+Do not manually copy final values from W&B into the paper.
+
+## Synthetic manifest
+
+Each generation should have a `manifest.csv` with at least:
+
+```text
+sample_id,image_path,annotation_path,label,generator,prompt,generation_seed,accepted,rejection_reason
+```
+
+Also record the generator revision/checkpoint hash, teacher checkpoint hash, confidence, and image SHA-256 when available.
+
+## Run identifiers
+
+Runs receive deterministic IDs such as:
+
+```text
+cifar10-resnet18-stable-diffusion-rf010-sr100-seed0-a81f29c3
+```
+
+The suffix hashes the resolved run settings, so different experiments cannot silently overwrite the same output directory.
+
+## Installation
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
+source .venv/bin/activate
 pip install -e ".[dev]"
+```
+
+For training and generation:
+
+```bash
+pip install -e ".[training,generation,tracking,dev]"
 ```
 
 ## Build experiment manifests
 
 ```bash
-python scripts/build_grid.py --preset pilot --output manifests/pilot.csv
-python scripts/build_grid.py --preset full --output manifests/full.csv
+python -m synthbench.experiments \
+  --experiment experiments/pilot.yaml \
+  --output experiments/pilot_runs.csv
+
+python -m synthbench.experiments \
+  --experiment experiments/full.yaml \
+  --output experiments/full_runs.csv
 ```
 
-Expected output:
+## Typical workflow
+
+```bash
+# 1. Create fixed real-data splits
+python scripts/prepare_data.py \
+  --source-manifest path/to/all_real_samples.csv \
+  --dataset-dir data/cifar10 \
+  --label-column label \
+  --seed 42
+
+# 2. Test generation storage with the placeholder adapter
+python scripts/generate.py \
+  --dataset-config configs/datasets/cifar10.yaml \
+  --generator-config configs/generators/stable_diffusion.yaml \
+  --generation-id smoke_v1 \
+  --placeholder
+
+# 3. Resolve one pilot experiment
+python scripts/train.py \
+  --experiment experiments/pilot.yaml \
+  --index 0 \
+  --dry-run
+
+# 4. Aggregate completed run metrics
+python scripts/aggregate.py --outputs outputs --results results
+```
+
+Generator adapters and complete task-specific training loops are deliberate extension points. The interfaces, paths, manifests, checkpoint format, and experiment system are prepared so they can be implemented without reorganizing the repository.
+
+## Checkpoint rules
+
+A downstream checkpoint should contain:
 
 ```text
-pilot: 18 experiments
-full: 864 experiments
+model_state_dict
+optimizer_state_dict
+scheduler_state_dict
+epoch
+global_step
+best_validation_metric
+resolved_config
+config_hash
+random_states
 ```
 
-## Run one experiment
+Generator checkpoints and downstream checkpoints must remain separate.
 
-```bash
-python scripts/run_experiment.py \
-  --manifest manifests/pilot.csv \
-  --index 0 \
-  --output-dir outputs
-```
+## Research rules
 
-`run_experiment.py` currently provides a strict, reproducible interface and a placeholder runner. Task-specific training and generator adapters should implement the interfaces described in `docs/experimental_protocol.md`.
-
-## Aggregate results
-
-```bash
-python scripts/aggregate_results.py \
-  --input-glob "outputs/**/metrics.json" \
-  --output results/summary.csv
-```
-
-## Two-student division
-
-A practical split is:
-
-- **Student A — synthetic-data pipeline:** generator adapters, prompt/conditioning protocol, generation cost, filtering, and image-quality/diversity analysis.
-- **Student B — downstream evaluation:** task models, real-data subsampling, training, metrics, statistical tests, and result aggregation.
-
-Both students should share the experiment manifest, dataset splits, result schema, and code review.
-
-## Reproducibility rules
-
-- Never commit raw datasets, generated images, model checkpoints, API keys, or W&B credentials.
-- Freeze train/validation/test splits before the first benchmark run.
-- Use at least three seeds for paper conclusions.
-- Report mean, standard deviation, paired confidence intervals, and effect sizes.
-- Log failed or excluded runs rather than silently deleting them.
-- Keep generation and downstream-compute costs in the final comparison.
-
-See `docs/experimental_protocol.md` for the full protocol.
+1. Never use test data for generator training, prompts, filtering, checkpoint selection, or hyperparameter tuning.
+2. Keep exact, versioned split CSV files.
+3. Record provenance for every synthetic image.
+4. Save the resolved configuration for every run.
+5. Use validation metrics to select `best.pt`.
+6. Keep failed runs in the manifest with a failure reason.
+7. Save metrics locally even when W&B is enabled.
+8. Do not commit raw images, generated images, or model weights.
+9. Aggregate across multiple seeds and report uncertainty.
+10. Generate paper tables and figures automatically from result CSV files.
