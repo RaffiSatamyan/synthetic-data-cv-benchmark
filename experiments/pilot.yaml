@@ -1,18 +1,31 @@
+name: imagenet100_pilot
+
 datasets:
-  - name: cifar10
-    model: resnet18
-  - name: voc_detection
-    model: fasterrcnn_resnet50_fpn
-  - name: cityscapes
-    model: deeplabv3_resnet50
+  - configs/datasets/imagenet100.yaml
 
-real_fractions: [0.10, 1.0]
-seeds: [0]
+models:
+  - configs/models/resnet18.yaml
 
-baselines:
-  - real_only
-  - classical_augmentation
+real_fractions:
+  - 0.01
+  - 0.10
 
 synthetic:
-  generators: [stable_diffusion]
-  ratios: [1.0]
+  generators:
+    - real_only
+  ratios:
+    - 0.0
+
+augmentations:
+  - baseline
+  - random_resized_crop
+  - horizontal_flip
+
+seeds:
+  - 42
+
+training:
+  config: configs/training.yaml
+  epochs: 1
+
+output_root: outputs
