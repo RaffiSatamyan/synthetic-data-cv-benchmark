@@ -1,0 +1,43 @@
+name: imagenet100
+task: classification
+
+num_classes: 100
+label_column: label
+image_column: image_path
+primary_metric: accuracy
+
+data_root: data/imagenet100
+
+splits:
+  full: data/imagenet100/splits/full/train.csv
+  1pct: data/imagenet100/splits/1pct/train.csv
+  3pct: data/imagenet100/splits/3pct/train.csv
+  5pct: data/imagenet100/splits/5pct/train.csv
+  10pct: data/imagenet100/splits/10pct/train.csv
+  25pct: data/imagenet100/splits/25pct/train.csv
+  50pct: data/imagenet100/splits/50pct/train.csv
+  100pct: data/imagenet100/splits/100pct/train.csv
+  validation: data/imagenet100/splits/val.csv
+  test: data/imagenet100/splits/test.csv
+
+real_fractions:
+  - 0.01
+  - 0.03
+  - 0.05
+  - 0.10
+  - 0.25
+  - 0.50
+  - 1.00
+
+subset_strategy:
+  nested: true
+  stratified: true
+  minimum_samples_per_class: 1
+
+image:
+  size: 224
+  channels: 3
+
+normalization:
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
