@@ -4,6 +4,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 import pandas as pd
+import math
 
 REQUIRED_COLUMNS = {"sample_id", "image_path"}
 
@@ -37,31 +38,85 @@ def validate_split_disjointness(
 
 def create_nested_subsets(
     train: pd.DataFrame,
-    fractions: Iterable[float] = (0.01, 0.03, 0.10, 1.0),
+    fractions: Iterable[float] = (
+        0.01,
+        0.03,
+        0.05,
+        0.10,
+        0.25,
+        0.50,
+        1.0,
+    ),
     seed: int = 42,
     label_column: str | None = None,
 ) -> dict[float, pd.DataFrame]:
-    """Create deterministic nested subsets; stratify approximately when labels exist."""
+
     fractions = sorted({float(value) for value in fractions})
+
     if not fractions or fractions[-1] != 1.0:
         raise ValueError("fractions must include 1.0")
+
     if fractions[0] <= 0 or fractions[-1] > 1:
         raise ValueError("fractions must be in (0, 1]")
 
-    shuffled = train.sample(frac=1.0, random_state=seed).reset_index(drop=True)
-    if label_column and label_column in train.columns:
-        parts = [
-            group.sample(frac=1.0, random_state=seed)
-            for _, group in train.groupby(label_column, sort=True)
-        ]
-        shuffled = pd.concat(parts).sample(frac=1.0, random_state=seed).reset_index(drop=True)
+    if train.empty:
+        raise ValueError("train dataset cannot be empty")
 
     subsets: dict[float, pd.DataFrame] = {}
-    for fraction in fractions:
-        size = len(shuffled) if fraction == 1.0 else max(1, round(len(shuffled) * fraction))
-        subsets[fraction] = shuffled.iloc[:size].copy()
-    return subsets
 
+    if label_column and label_column in train.columns:
+        shuffled_groups = []
+
+        for _, group in train.groupby(label_column, sort=True):
+            shuffled_group = group.sample(
+                frac=1.0,
+                random_state=seed,
+            ).reset_index(drop=True)
+
+            shuffled_groups.append(shuffled_group)
+
+        for fraction in fractions:
+            selected_groups = []
+
+            for group in shuffled_groups:
+                if fraction == 1.0:
+                    size = len(group)
+                else:
+                    size = max(
+                        1,
+                        math.ceil(len(group) * fraction),
+                    )
+
+                selected_groups.append(group.iloc[:size])
+
+            subset = pd.concat(
+                selected_groups,
+                ignore_index=True,
+            )
+
+            subsets[fraction] = subset.sample(
+                frac=1.0,
+                random_state=seed,
+            ).reset_index(drop=True)
+
+    else:
+        shuffled = train.sample(
+            frac=1.0,
+            random_state=seed,
+        ).reset_index(drop=True)
+
+        for fraction in fractions:
+            if fraction == 1.0:
+                size = len(shuffled)
+            else:
+                size = max(
+                    1,
+                    math.ceil(len(shuffled) * fraction),
+                )
+
+            subsets[fraction] = shuffled.iloc[:size].copy()
+
+    return subsets
 
 def build_mixed_manifest(
     real: pd.DataFrame,
