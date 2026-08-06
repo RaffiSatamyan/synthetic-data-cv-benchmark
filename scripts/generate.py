@@ -7,9 +7,9 @@ import pandas as pd
 
 from synthbench.config import load_yaml
 from synthbench.generation import (
+    generate_dataset,
     GenerationRequest,
     PlaceholderGenerator,
-    generate_dataset,
 )
 
 
