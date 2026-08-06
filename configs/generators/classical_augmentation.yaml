@@ -1,7 +1,46 @@
 name: classical_augmentation
-type: baseline
-enabled: false
-augmentations:
-  horizontal_flip: true
-  random_crop: true
-  color_jitter: true
+type: classical_augmentation
+enabled: true
+
+# Select one method per experiment.
+selected_method: random_resized_crop
+
+apply_to:
+  real: true
+  synthetic: true
+
+methods:
+  random_resized_crop:
+    stage: sample
+    size: 224
+    scale: [0.08, 1.0]
+    ratio: [0.75, 1.333333]
+
+  horizontal_flip:
+    stage: sample
+    probability: 0.5
+
+  color_jitter:
+    stage: sample
+    brightness: 0.4
+    contrast: 0.4
+    saturation: 0.4
+    hue: 0.1
+    probability: 0.8
+
+  randaugment:
+    stage: sample
+    num_operations: 2
+    magnitude: 9
+
+  mixup:
+    stage: batch
+    alpha: 0.2
+    probability: 1.0
+    label_mode: soft
+
+  cutmix:
+    stage: batch
+    alpha: 1.0
+    probability: 1.0
+    label_mode: soft
