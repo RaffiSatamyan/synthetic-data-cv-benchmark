@@ -16,7 +16,6 @@ splits:
   10pct: data/imagenet100/splits/10pct/train.csv
   25pct: data/imagenet100/splits/25pct/train.csv
   50pct: data/imagenet100/splits/50pct/train.csv
-  100pct: data/imagenet100/splits/100pct/train.csv
   validation: data/imagenet100/splits/val.csv
   test: data/imagenet100/splits/test.csv
 
