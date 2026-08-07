@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 import pandas as pd
+
 from synthbench.config import load_yaml
 from synthbench.generation import (
     GenerationRequest,
