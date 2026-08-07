@@ -1,6 +1,5 @@
 import pandas as pd
 import pytest
-
 from synthbench.datasets import (
     build_mixed_manifest,
     create_nested_subsets,
