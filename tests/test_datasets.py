@@ -7,7 +7,6 @@ from synthbench.datasets import (
     validate_split_disjointness,
 )
 
-
 REQUIRED_FRACTIONS = (
     0.01,
     0.03,
