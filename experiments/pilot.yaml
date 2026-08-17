@@ -1,12 +1,10 @@
+# Small grid to smoke-test the full classification pipeline end to end.
+# Uses only baselines, so it needs no generated synthetic images.
 datasets:
-  - name: cifar10
+  - name: imagenet100
     model: resnet18
-  - name: voc_detection
-    model: fasterrcnn_resnet50_fpn
-  - name: cityscapes
-    model: deeplabv3_resnet50
 
-real_fractions: [0.10, 1.0]
+real_fractions: [0.01, 0.10]
 seeds: [0]
 
 baselines:
@@ -14,5 +12,5 @@ baselines:
   - classical_augmentation
 
 synthetic:
-  generators: [stable_diffusion]
-  ratios: [1.0]
+  generators: []
+  ratios: []
