@@ -66,8 +66,8 @@ Reusable component settings. These files describe one dataset, generator, model,
 
 Defines which combinations should run.
 
-- `pilot.yaml`: small 18-run grid for testing the full pipeline.
-- `full.yaml`: larger 288-run benchmark grid.
+- `pilot.yaml`: small 4-run ImageNet-100 grid (baselines only) for smoke-testing the pipeline.
+- `full.yaml`: 252-run ImageNet-100 classification benchmark grid.
 - `paper_runs.csv`: frozen list of runs included in the final paper. Do not silently regenerate it after results are finalized.
 
 ### `src/synthbench/`
@@ -196,17 +196,23 @@ python scripts/generate.py \
   --generation-id smoke_v1 \
   --placeholder
 
-# 3. Resolve one pilot experiment
+# 3. Preview one pilot experiment (prints the resolved run, no training)
 python scripts/train.py \
   --experiment experiments/pilot.yaml \
   --index 0 \
   --dry-run
 
-# 4. Aggregate completed run metrics
+# 4. Train that run for real (writes a full outputs/<run_id>/ directory)
+python scripts/train.py --experiment experiments/pilot.yaml --index 0
+
+# 5. Evaluate it on the untouched test split
+python scripts/evaluate.py --run-dir outputs/<run_id>
+
+# 6. Aggregate completed run metrics into paper CSVs
 python scripts/aggregate.py --outputs outputs --results results
 ```
 
-Generator adapters and complete task-specific training loops are deliberate extension points. The interfaces, paths, manifests, checkpoint format, and experiment system are prepared so they can be implemented without reorganizing the repository.
+The classification training and evaluation loops are implemented (`train_experiment` / `evaluate_run`), covering the real-fraction × synthetic-ratio × seed grid on ImageNet-100, with real/synthetic mixing, MixUp/CutMix, and validation-selected checkpoints. Real synthetic-image generator adapters (Stable Diffusion, StyleGAN2) and non-classification task loops remain deliberate extension points: the interfaces, paths, manifests, checkpoint format, and experiment system are prepared so they can be added without reorganizing the repository.
 
 ## Checkpoint rules
 

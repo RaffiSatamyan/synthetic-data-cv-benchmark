@@ -2,4 +2,4 @@ name: resnet18
 task: classification
 pretrained: true
 weights: DEFAULT
-num_classes: 10
+num_classes: 100
