@@ -29,6 +29,12 @@ generation = [
 tracking = [
   "wandb>=0.17",
 ]
+viz = [
+  "matplotlib>=3.7",
+]
+provision = [
+  "kaggle>=1.6",
+]
 dev = [
   "pytest>=8.0",
   "ruff>=0.6",

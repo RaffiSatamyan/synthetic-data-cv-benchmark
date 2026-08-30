@@ -1,15 +1,37 @@
 from __future__ import annotations
 
+import csv
+import json
 import random
+import shutil
 import time
 from pathlib import Path
 from typing import Any
 
 from .config import load_yaml
 from .datasets import build_mixed_manifest, load_manifest
-from .evaluation import classification_metrics, save_metrics
+from .evaluation import (
+    classification_metrics,
+    collect_predictions,
+    confusion_matrix,
+    per_class_accuracy,
+    save_metrics,
+    save_predictions_csv,
+    topk_accuracy,
+)
 from .models import build_model
 from .utils import environment_info, set_seed, stable_hash, write_json, write_yaml
+
+# Column order for the per-epoch training history log used to plot learning curves.
+HISTORY_COLUMNS = (
+    "epoch",
+    "train_loss",
+    "val_accuracy",
+    "val_macro_f1",
+    "val_top5_accuracy",
+    "learning_rate",
+    "epoch_seconds",
+)
 
 # Maps a real_fraction to the split-manifest key declared in the dataset config.
 FRACTION_TO_SPLIT = {
@@ -123,22 +145,132 @@ def _append_log(run_dir: Path, message: str) -> None:
         handle.write(line)
 
 
-def _run_validation(model, loader, device) -> dict[str, float]:
+def _evaluate_split(model, loader, device, sample_ids, index_to_label):
+    """Validate and return (metrics, per-sample records, true indices, pred indices)."""
+    records, true_labels, predicted_labels = collect_predictions(
+        model, loader, device, sample_ids=sample_ids, index_to_label=index_to_label
+    )
+    metrics = classification_metrics(true_labels, predicted_labels)
+    metrics["top5_accuracy"] = topk_accuracy(records, k=5)
+    return metrics, records, true_labels, predicted_labels
+
+
+def _append_history(run_dir: Path, row: dict[str, Any]) -> None:
+    """Append one epoch to history.csv, writing the header on first use."""
+    path = run_dir / "history.csv"
+    write_header = not path.exists()
+    with path.open("a", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=HISTORY_COLUMNS)
+        if write_header:
+            writer.writeheader()
+        writer.writerow({key: row.get(key) for key in HISTORY_COLUMNS})
+
+
+def build_optimizer(model, training_cfg: dict[str, Any]):
+    """Build the optimizer from the model's paper recipe.
+
+    Reads ``training_cfg['optimizer']`` (name + hyper-parameters). When no
+    ``optimizer`` block is present it falls back to AdamW using the flat
+    ``learning_rate`` / ``weight_decay`` keys, preserving the original behaviour.
+    """
     import torch
 
-    model.eval()
-    true_labels: list[int] = []
-    predicted_labels: list[int] = []
-    with torch.no_grad():
-        for inputs, targets in loader:
-            outputs = model(inputs.to(device, non_blocking=True))
-            predicted_labels.extend(outputs.argmax(dim=1).cpu().tolist())
-            true_labels.extend(int(value) for value in targets.tolist())
-    return classification_metrics(true_labels, predicted_labels)
+    spec = training_cfg.get("optimizer")
+    default_lr = float(training_cfg.get("learning_rate", 1e-3))
+    default_wd = float(training_cfg.get("weight_decay", 1e-4))
+    if not spec:
+        return torch.optim.AdamW(model.parameters(), lr=default_lr, weight_decay=default_wd)
+
+    name = str(spec.get("name", "adamw")).lower()
+    lr = float(spec.get("lr", default_lr))
+    weight_decay = float(spec.get("weight_decay", default_wd))
+    if name == "sgd":
+        return torch.optim.SGD(
+            model.parameters(),
+            lr=lr,
+            momentum=float(spec.get("momentum", 0.9)),
+            weight_decay=weight_decay,
+            nesterov=bool(spec.get("nesterov", False)),
+        )
+    if name == "adam":
+        return torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+    if name == "adamw":
+        return torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+    if name == "rmsprop":
+        return torch.optim.RMSprop(
+            model.parameters(),
+            lr=lr,
+            momentum=float(spec.get("momentum", 0.0)),
+            alpha=float(spec.get("alpha", 0.99)),
+            weight_decay=weight_decay,
+        )
+    raise ValueError(f"Unknown optimizer: {name!r}")
 
 
-def train_experiment(config: dict[str, Any], run_dir: str | Path) -> Path:
-    """Train one downstream classification run under the fixed run contract."""
+def build_scheduler(optimizer, training_cfg: dict[str, Any], epochs: int):
+    """Build the LR scheduler from the model's paper recipe (per-epoch stepping).
+
+    Supports step / multistep / cosine / exponential / none. Defaults to cosine
+    over ``epochs`` when no ``scheduler`` block is given (original behaviour).
+    """
+    import torch
+
+    spec = training_cfg.get("scheduler")
+    if spec is None:
+        return torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(epochs, 1))
+
+    name = str(spec.get("name", "cosine")).lower()
+    if name in ("none", "constant"):
+        return torch.optim.lr_scheduler.LambdaLR(optimizer, lambda _epoch: 1.0)
+    if name == "step":
+        return torch.optim.lr_scheduler.StepLR(
+            optimizer, step_size=int(spec.get("step_size", 30)), gamma=float(spec.get("gamma", 0.1))
+        )
+    if name == "multistep":
+        return torch.optim.lr_scheduler.MultiStepLR(
+            optimizer,
+            milestones=[int(m) for m in spec.get("milestones", [30, 60])],
+            gamma=float(spec.get("gamma", 0.1)),
+        )
+    if name == "exponential":
+        return torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=float(spec.get("gamma", 0.95)))
+    if name == "cosine":
+        return torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=int(spec.get("t_max", max(epochs, 1)))
+        )
+    raise ValueError(f"Unknown scheduler: {name!r}")
+
+
+def completed_run(run_dir: str | Path, config_hash: str) -> Path | None:
+    """Return the run dir if it holds a completed run matching ``config_hash``.
+
+    This is what lets us honour "if a model is already trained, load its exact
+    checkpoint instead of retraining", keyed on the full resolved config.
+    """
+    run_dir = Path(run_dir)
+    status_path = run_dir / "status.json"
+    if not status_path.exists() or not (run_dir / "best.pt").exists():
+        return None
+    try:
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if status.get("status") == "completed" and status.get("config_hash") == config_hash:
+        return run_dir
+    return None
+
+
+def train_experiment(
+    config: dict[str, Any], run_dir: str | Path, *, force: bool = False
+) -> Path:
+    """Train one downstream classification run under the fixed run contract.
+
+    If a completed run with an identical resolved config already exists at
+    ``run_dir``, training is skipped and the existing directory is returned
+    (unless ``force`` is set). This prevents wasteful retraining and, crucially,
+    guarantees each dataset size trains from its own fresh checkpoint rather than
+    inheriting weights from a larger split.
+    """
     import torch
     from torch import nn
     from torch.utils.data import DataLoader
@@ -167,6 +299,16 @@ def train_experiment(config: dict[str, Any], run_dir: str | Path) -> Path:
     # Keep the model head consistent with the dataset regardless of the model yaml.
     model_cfg["num_classes"] = int(dataset_cfg["num_classes"])
 
+    # Hash the fully resolved config so we can detect an identical completed run.
+    config_hash = stable_hash(config)
+    run_dir = Path(run_dir)
+    already_trained = completed_run(run_dir, config_hash)
+    if already_trained is not None and not force:
+        return already_trained
+    if run_dir.exists():
+        # An incomplete, failed, or force-overwritten run: start clean.
+        shutil.rmtree(run_dir)
+
     run_dir = prepare_run_directory(run_dir, config)
     try:
         seed = int(experiment.get("seed", training_cfg.get("seed", 0)))
@@ -176,6 +318,9 @@ def train_experiment(config: dict[str, Any], run_dir: str | Path) -> Path:
         synthetic_ratio = float(experiment.get("synthetic_ratio", 0.0))
         generator = experiment.get("generator", generator_cfg.get("name"))
         data_root = Path(dataset_cfg["data_root"])
+        # Images may live apart from data_root (e.g. a read-only Kaggle mount),
+        # so committed splits store paths relative to this per-device image_root.
+        image_root = Path(dataset_cfg.get("image_root", data_root))
         label_column = dataset_cfg.get("label_column", "label")
 
         splits = dataset_cfg["splits"]
@@ -191,6 +336,11 @@ def train_experiment(config: dict[str, Any], run_dir: str | Path) -> Path:
 
         train_frame = build_mixed_manifest(real, synthetic, synthetic_ratio, seed)
         label_map = build_label_map(validation, label_column)
+        index_to_label = {index: label for label, index in label_map.items()}
+        num_classes = int(dataset_cfg["num_classes"])
+        val_sample_ids = (
+            validation["sample_id"].tolist() if "sample_id" in validation.columns else None
+        )
         write_json(run_dir / "label_map.json", {str(k): v for k, v in label_map.items()})
 
         train_transform = build_train_transforms(dataset_cfg, generator_cfg)
@@ -198,10 +348,10 @@ def train_experiment(config: dict[str, Any], run_dir: str | Path) -> Path:
         mixer = make_batch_mixer(generator_cfg)
 
         train_dataset = build_image_dataset(
-            train_frame, label_map, train_transform, data_root, label_column
+            train_frame, label_map, train_transform, image_root, label_column
         )
         val_dataset = build_image_dataset(
-            validation, label_map, eval_transform, data_root, label_column
+            validation, label_map, eval_transform, image_root, label_column
         )
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -220,13 +370,9 @@ def train_experiment(config: dict[str, Any], run_dir: str | Path) -> Path:
         )
 
         model = build_model(model_cfg).to(device)
-        optimizer = torch.optim.AdamW(
-            model.parameters(),
-            lr=float(training_cfg.get("learning_rate", 1e-3)),
-            weight_decay=float(training_cfg.get("weight_decay", 1e-4)),
-        )
         epochs = int(training_cfg.get("epochs", 100))
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(epochs, 1))
+        optimizer = build_optimizer(model, training_cfg)
+        scheduler = build_scheduler(optimizer, training_cfg, epochs)
         criterion = nn.CrossEntropyLoss()
 
         use_amp = bool(training_cfg.get("mixed_precision", False)) and device.type == "cuda"
@@ -251,6 +397,10 @@ def train_experiment(config: dict[str, Any], run_dir: str | Path) -> Path:
 
         for epoch in range(epochs):
             model.train()
+            epoch_started = time.time()
+            loss_total = 0.0
+            loss_batches = 0
+            current_lr = optimizer.param_groups[0]["lr"]
             for batch_index, (inputs, targets) in enumerate(train_loader):
                 if limit_batches is not None and batch_index >= int(limit_batches):
                     break
@@ -268,10 +418,15 @@ def train_experiment(config: dict[str, Any], run_dir: str | Path) -> Path:
                 scaler.scale(loss).backward()
                 scaler.step(optimizer)
                 scaler.update()
+                loss_total += float(loss.detach())
+                loss_batches += 1
                 global_step += 1
             scheduler.step()
+            train_loss = loss_total / loss_batches if loss_batches else float("nan")
 
-            metrics = _run_validation(model, val_loader, device)
+            metrics, val_records, val_true, val_pred = _evaluate_split(
+                model, val_loader, device, val_sample_ids, index_to_label
+            )
             save_checkpoint(
                 run_dir / "last.pt",
                 model=model,
@@ -296,9 +451,34 @@ def train_experiment(config: dict[str, Any], run_dir: str | Path) -> Path:
                     best_validation_metric=best_metric,
                     resolved_config=config,
                 )
+                # Snapshot the winning epoch's per-sample predictions and confusion.
+                save_predictions_csv(run_dir / "predictions_val.csv", val_records)
+                write_json(
+                    run_dir / "val_confusion_matrix.json",
+                    {
+                        "labels": [index_to_label.get(i, i) for i in range(num_classes)],
+                        "matrix": confusion_matrix(val_true, val_pred, num_classes),
+                        "per_class_accuracy": per_class_accuracy(
+                            val_true, val_pred, num_classes
+                        ),
+                    },
+                )
+            _append_history(
+                run_dir,
+                {
+                    "epoch": epoch,
+                    "train_loss": round(train_loss, 6),
+                    "val_accuracy": round(metrics["accuracy"], 6),
+                    "val_macro_f1": round(metrics["macro_f1"], 6),
+                    "val_top5_accuracy": round(metrics["top5_accuracy"], 6),
+                    "learning_rate": current_lr,
+                    "epoch_seconds": round(time.time() - epoch_started, 2),
+                },
+            )
             _append_log(
                 run_dir,
-                f"epoch={epoch} val_accuracy={metrics['accuracy']:.4f} "
+                f"epoch={epoch} train_loss={train_loss:.4f} "
+                f"val_accuracy={metrics['accuracy']:.4f} "
                 f"val_macro_f1={metrics['macro_f1']:.4f} best={best_metric:.4f}",
             )
             write_json(
@@ -320,10 +500,15 @@ def train_experiment(config: dict[str, Any], run_dir: str | Path) -> Path:
             "best_epoch": best_epoch,
             "val_accuracy": best_metrics.get("accuracy"),
             "val_macro_f1": best_metrics.get("macro_f1"),
+            "val_top5_accuracy": best_metrics.get("top5_accuracy"),
+            "config_hash": config_hash,
             "train_seconds": round(time.time() - started, 2),
         }
         save_metrics(run_dir, final_metrics)
-        write_json(run_dir / "status.json", {"status": "completed", "best": best_metric})
+        write_json(
+            run_dir / "status.json",
+            {"status": "completed", "best": best_metric, "config_hash": config_hash},
+        )
         _append_log(run_dir, f"completed best_val_accuracy={best_metric:.4f}")
         return run_dir
     except Exception as error:
@@ -350,13 +535,84 @@ def resolve_experiment_config(
     experiment["run_id"] = row.get("run_id")
     if generation_id:
         experiment["generation_id"] = generation_id
-    return resolve_run_config(
+    config = resolve_run_config(
         dataset_path=configs_dir / "datasets" / f"{row['dataset']}.yaml",
         generator_path=configs_dir / "generators" / f"{row['generator']}.yaml",
         model_path=configs_dir / "models" / f"{row['model']}.yaml",
         training_path=configs_dir / "training.yaml",
         overrides={"experiment": experiment},
     )
+    # A model's paper recipe (optimizer/scheduler/epochs/batch) lives in its
+    # model yaml under `train:` and overrides the shared training defaults, so
+    # each architecture trains exactly the way its source paper prescribes.
+    recipe = config.get("model", {}).get("train")
+    if recipe:
+        from .config import deep_merge
+
+        config["training"] = deep_merge(config["training"], recipe)
+    return config
+
+
+def train(
+    dataset: str,
+    model: str,
+    *,
+    generator: str = "real_only",
+    real_fraction: float = 1.0,
+    synthetic_ratio: float = 0.0,
+    seed: int = 0,
+    configs_dir: str | Path = "configs",
+    outputs_dir: str | Path = "outputs",
+    generation_id: str | None = None,
+    training_overrides: dict[str, Any] | None = None,
+    force: bool = False,
+    provision: bool = True,
+    evaluate: bool = True,
+    make_plots: bool = True,
+) -> Path:
+    """One-call entry point: data + model + params -> a fully trained, evaluated run.
+
+    This is the "hand it everything and it does the rest" function: it resolves
+    the config from the repo's config tree, provisions the dataset if missing,
+    trains from scratch (or loads the exact existing checkpoint when a matching
+    completed run exists), evaluates on the held-out test split, and writes the
+    per-run figures. ``run_id`` matches the experiment manifest so a single run
+    and a full sweep stay addressable the same way.
+    """
+    from .config import deep_merge
+    from .experiments import make_run_id
+
+    row: dict[str, Any] = {
+        "dataset": dataset,
+        "model": model,
+        "generator": generator,
+        "real_fraction": float(real_fraction),
+        "synthetic_ratio": float(synthetic_ratio),
+        "seed": int(seed),
+    }
+    row["config_hash"] = stable_hash(row)
+    row["run_id"] = make_run_id(row)
+
+    config = resolve_experiment_config(row, configs_dir, generation_id)
+    if training_overrides:
+        config = deep_merge(config, {"training": training_overrides})
+
+    if provision:
+        from .provision import ensure_dataset
+
+        ensure_dataset(config["dataset"])
+
+    run_dir = train_experiment(config, Path(outputs_dir) / row["run_id"], force=force)
+
+    if evaluate:
+        from .evaluation import evaluate_run
+
+        evaluate_run(run_dir, save_predictions=True)
+    if make_plots:
+        from .plots import plot_run
+
+        plot_run(run_dir)
+    return run_dir
 
 
 def load_config(path: str | Path) -> dict[str, Any]:

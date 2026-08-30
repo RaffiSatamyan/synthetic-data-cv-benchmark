@@ -1,5 +1,24 @@
 name: resnet18
 task: classification
-pretrained: true
-weights: DEFAULT
+
+# Raffi's rule: replicate the source paper's recipe verbatim, train from scratch
+# (no ImageNet-pretrained weights — that would leak, since ImageNet-100 ⊂ ImageNet-1k).
+pretrained: false
 num_classes: 100
+
+# Canonical ImageNet ResNet recipe (He et al. 2015 / torchvision reference):
+# SGD + momentum, step LR decay, 90 epochs, batch 256. Override --epochs /
+# --batch-size on the CLI for quick smoke tests without editing this file.
+train:
+  optimizer:
+    name: sgd
+    lr: 0.1
+    momentum: 0.9
+    weight_decay: 1.0e-4
+    nesterov: false
+  scheduler:
+    name: step
+    step_size: 30
+    gamma: 0.1
+  epochs: 90
+  batch_size: 256

@@ -21,6 +21,9 @@ def main() -> None:
         help="Synthetic generation id to train on (defaults to newest).",
     )
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--force", action="store_true", help="Retrain even if a matching checkpoint exists"
+    )
     args = parser.parse_args()
 
     rows = build_grid(load_yaml(args.experiment))
@@ -36,7 +39,7 @@ def main() -> None:
     from synthbench.training import resolve_experiment_config, train_experiment
 
     config = resolve_experiment_config(run, args.configs_dir, args.generation_id)
-    run_dir = train_experiment(config, args.outputs / run["run_id"])
+    run_dir = train_experiment(config, args.outputs / run["run_id"], force=args.force)
     print(f"Completed run: {run_dir}")
 
 

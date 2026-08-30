@@ -8,6 +8,44 @@ primary_metric: accuracy
 
 data_root: data/imagenet100
 
+# Where the class folders physically live on THIS machine. Split CSVs store
+# paths relative to this, so the committed split (data/imagenet100/splits/*.csv)
+# is portable: set IMAGENET100_ROOT per device (Kaggle mount, local disk, ...).
+image_root: ${env:IMAGENET100_ROOT,data/imagenet100/ILSVRC/Data/CLS-LOC/train}
+
+# How to materialise the dataset when splits are absent. `ensure_dataset`
+# builds a source manifest from the class folders, then writes the deterministic
+# train/val/test + nested-subset splits below (fixed seed => identical subsets
+# every run, every machine).
+#
+# Source = the ImageNet Object Localization Challenge (full ImageNet-1k). We take
+# the first `max_classes` sorted wnid folders from train/ to form ImageNet-100,
+# and carve our OWN val/test from those labelled train images -- the challenge's
+# official val/ is flat + CSV-labelled and is intentionally NOT used.
+# To pin a specific 100-class list instead of "first 100", drop a file of wnids
+# (one per line) and set `class_list_file:` on the source (overrides max_classes).
+#
+# --- Kaggle notebook (recommended for testing: data is mounted, zero download) ---
+# Set data_root to a writable dir and point the source at the read-only mount:
+#   data_root: /kaggle/working/imagenet100
+#   provision:
+#     manifest_sources:
+#       - path: /kaggle/input/imagenet-object-localization-challenge/ILSVRC/Data/CLS-LOC/train
+#         absolute: true
+#         max_classes: 100
+#
+# --- Download mode (local box with ~155 GB free + Kaggle creds) ---
+# Uses the config below as-is; requires accepting the competition rules on Kaggle first.
+provision:
+  competition: imagenet-object-localization-challenge
+  unzip: true
+  manifest_sources:
+    - path: ILSVRC/Data/CLS-LOC/train
+      max_classes: 100
+  validation_fraction: 0.1
+  test_fraction: 0.1
+  seed: 42
+
 splits:
   full: data/imagenet100/splits/full/train.csv
   1pct: data/imagenet100/splits/1pct/train.csv
