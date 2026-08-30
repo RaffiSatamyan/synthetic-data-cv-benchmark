@@ -12,14 +12,15 @@ data_root: /kaggle/working/imagenet100
 # Where the class folders physically live (read-only Kaggle mount). Split CSVs
 # store paths RELATIVE to this, so the committed split resolves on any machine
 # by just repointing image_root.
-image_root: /kaggle/input/imagenet-object-localization-challenge/ILSVRC/Data/CLS-LOC/train
+# NOTE: this notebook mounts under .../input/competitions/... (verified via ls).
+image_root: /kaggle/input/competitions/imagenet-object-localization-challenge/ILSVRC/Data/CLS-LOC/train
 
 # Read the ImageNet Object Localization Challenge straight from the mount (no
 # download). First 100 sorted wnid folders = ImageNet-100; val/test are carved
 # from those labelled train images.
 provision:
   manifest_sources:
-    - path: /kaggle/input/imagenet-object-localization-challenge/ILSVRC/Data/CLS-LOC/train
+    - path: /kaggle/input/competitions/imagenet-object-localization-challenge/ILSVRC/Data/CLS-LOC/train
       max_classes: 100
   validation_fraction: 0.1
   test_fraction: 0.1
