@@ -36,6 +36,12 @@ def main() -> None:
     parser.add_argument("--no-provision", action="store_true", help="Assume data is already local")
     parser.add_argument("--no-eval", action="store_true")
     parser.add_argument("--no-plots", action="store_true")
+    parser.add_argument(
+        "--all-subsets",
+        action="store_true",
+        help="Sweep every real_fraction (1%%->100%%), each trained from scratch, "
+        "then plot accuracy vs data size. Ignores --real-fraction.",
+    )
     args = parser.parse_args()
 
     training_overrides: dict[str, int] = {}
@@ -59,8 +65,14 @@ def main() -> None:
         provision=not args.no_provision,
         evaluate=not args.no_eval,
         make_plots=not args.no_plots,
+        all_subsets=args.all_subsets,
     )
-    print(f"Run complete: {run_dir}")
+    if isinstance(run_dir, list):
+        print(f"Sweep complete: {len(run_dir)} subset runs")
+        for path in run_dir:
+            print(f"  {path}")
+    else:
+        print(f"Run complete: {run_dir}")
 
 
 if __name__ == "__main__":

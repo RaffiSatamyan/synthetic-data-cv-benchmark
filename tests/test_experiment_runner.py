@@ -331,6 +331,71 @@ def test_resume_skips_completed_run(tmp_path):
     assert (run_dir / "best.pt").stat().st_mtime_ns != first_mtime
 
 
+def test_all_subsets_sweep(tmp_path):
+    _require_training()
+    pytest.importorskip("matplotlib")
+    import yaml
+
+    from synthbench.provision import ensure_dataset
+    from synthbench.training import train
+
+    root = _make_imagefolder(tmp_path / "data" / "tinyset", {"train": 12, "val": 4, "test": 4})
+    dataset_cfg = {
+        "name": "tinyset",
+        "task": "classification",
+        "num_classes": len(CLASSES),
+        "label_column": "label",
+        "data_root": str(root),
+        "splits": {
+            "full": str(root / "splits" / "full" / "train.csv"),
+            "50pct": str(root / "splits" / "50pct" / "train.csv"),
+            "validation": str(root / "splits" / "val.csv"),
+            "test": str(root / "splits" / "test.csv"),
+        },
+        "real_fractions": [0.5, 1.0],  # two subsets to sweep
+        "provision": {
+            "manifest_sources": [
+                {"path": "train", "prefix": "train"},
+                {"path": "val", "prefix": "val"},
+                {"path": "test", "prefix": "test"},
+            ],
+            "validation_fraction": 0.25,
+            "test_fraction": 0.25,
+            "seed": 0,
+        },
+        "image": {"size": 32},
+        "normalization": {"mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]},
+    }
+    ensure_dataset(dataset_cfg)
+
+    configs = tmp_path / "configs"
+    (configs / "datasets").mkdir(parents=True)
+    (configs / "models").mkdir()
+    (configs / "generators").mkdir()
+    (configs / "datasets" / "tinyset.yaml").write_text(yaml.safe_dump(dataset_cfg))
+    (configs / "models" / "resnet18.yaml").write_text(
+        yaml.safe_dump({"name": "resnet18", "task": "classification", "pretrained": False})
+    )
+    (configs / "generators" / "real_only.yaml").write_text(
+        yaml.safe_dump({"name": "real_only", "type": "baseline", "enabled": False})
+    )
+    (configs / "training.yaml").write_text(
+        yaml.safe_dump({"epochs": 1, "batch_size": 4, "num_workers": 0, "seed": 0})
+    )
+
+    outputs = tmp_path / "outputs"
+    run_dirs = train(
+        "tinyset", "resnet18", configs_dir=configs, outputs_dir=outputs,
+        provision=False, all_subsets=True,
+    )
+    # One independent run per fraction, plus the cross-run data-scaling figure.
+    assert isinstance(run_dirs, list) and len(run_dirs) == 2
+    assert len({p.name for p in run_dirs}) == 2  # distinct run ids per fraction
+    for path in run_dirs:
+        assert (path / "metrics.json").exists()
+    assert (outputs / "data_scaling_test_accuracy.png").exists()
+
+
 def test_train_wrapper_end_to_end(tmp_path):
     _require_training()
     pytest.importorskip("matplotlib")

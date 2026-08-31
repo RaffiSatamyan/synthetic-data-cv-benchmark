@@ -569,7 +569,8 @@ def train(
     provision: bool = True,
     evaluate: bool = True,
     make_plots: bool = True,
-) -> Path:
+    all_subsets: bool = False,
+) -> Path | list[Path]:
     """One-call entry point: data + model + params -> a fully trained, evaluated run.
 
     This is the "hand it everything and it does the rest" function: it resolves
@@ -578,9 +579,31 @@ def train(
     completed run exists), evaluates on the held-out test split, and writes the
     per-run figures. ``run_id`` matches the experiment manifest so a single run
     and a full sweep stay addressable the same way.
+
+    With ``all_subsets=True`` it instead sweeps every ``real_fraction`` in the
+    dataset config, ascending (1% -> 3% -> ... -> 100%), training each subset
+    from its own fresh checkpoint, and finally writes the cross-run
+    accuracy-vs-data-size figure. Returns the list of run directories.
     """
     from .config import deep_merge
     from .experiments import make_run_id
+
+    if all_subsets:
+        return _train_all_subsets(
+            dataset,
+            model,
+            generator=generator,
+            synthetic_ratio=synthetic_ratio,
+            seed=seed,
+            configs_dir=configs_dir,
+            outputs_dir=outputs_dir,
+            generation_id=generation_id,
+            training_overrides=training_overrides,
+            force=force,
+            provision=provision,
+            evaluate=evaluate,
+            make_plots=make_plots,
+        )
 
     row: dict[str, Any] = {
         "dataset": dataset,
@@ -613,6 +636,66 @@ def train(
 
         plot_run(run_dir)
     return run_dir
+
+
+def _train_all_subsets(
+    dataset: str,
+    model: str,
+    *,
+    generator: str,
+    synthetic_ratio: float,
+    seed: int,
+    configs_dir: str | Path,
+    outputs_dir: str | Path,
+    generation_id: str | None,
+    training_overrides: dict[str, Any] | None,
+    force: bool,
+    provision: bool,
+    evaluate: bool,
+    make_plots: bool,
+) -> list[Path]:
+    """Train every real-data fraction in the dataset config, then plot the sweep.
+
+    Each fraction is a fully independent from-scratch run (this is what makes the
+    "does more data help" comparison valid — no fraction inherits weights from a
+    larger one). Provisioning runs only for the first fraction; the rest reuse the
+    now-present data and split.
+    """
+    dataset_cfg = load_yaml(Path(configs_dir) / "datasets" / f"{dataset}.yaml")
+    fractions = sorted(float(value) for value in dataset_cfg.get("real_fractions", [1.0]))
+
+    run_dirs: list[Path] = []
+    for index, fraction in enumerate(fractions):
+        run_dir = train(
+            dataset,
+            model,
+            generator=generator,
+            real_fraction=fraction,
+            synthetic_ratio=synthetic_ratio,
+            seed=seed,
+            configs_dir=configs_dir,
+            outputs_dir=outputs_dir,
+            generation_id=generation_id,
+            training_overrides=training_overrides,
+            force=force,
+            provision=provision and index == 0,  # provision once, reuse thereafter
+            evaluate=evaluate,
+            make_plots=make_plots,
+            all_subsets=False,
+        )
+        run_dirs.append(run_dir)
+
+    # The payoff figure: accuracy against real-data fraction across the sweep.
+    if make_plots:
+        from .plots import aggregate_runs, plot_data_scaling
+
+        frame = aggregate_runs(outputs_dir)
+        metric = "test_accuracy" if evaluate else "val_accuracy"
+        if not frame.empty and metric in frame.columns:
+            plot_data_scaling(
+                frame, Path(outputs_dir) / f"data_scaling_{metric}.png", metric=metric
+            )
+    return run_dirs
 
 
 def load_config(path: str | Path) -> dict[str, Any]:
