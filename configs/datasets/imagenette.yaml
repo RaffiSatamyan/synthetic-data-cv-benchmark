@@ -1,0 +1,59 @@
+name: imagenette
+task: classification
+
+num_classes: 10
+label_column: label
+image_column: image_path
+primary_metric: accuracy
+
+data_root: data/imagenette
+# Where the extracted class folders live. Split CSVs store paths relative to this.
+image_root: ${env:IMAGENETTE_ROOT,data/imagenette/imagenette2-320}
+
+# A real, trainable 10-class ImageNet subset (fast.ai), ~326 MB, no credentials.
+# Downloaded + extracted straight from the URL. We use its OWN train/ and val/
+# folders directly (role mode): train/ -> training + nested subsets, val/ -> both
+# validation and the final test (Imagenette ships no separate test set).
+provision:
+  url: https://s3.amazonaws.com/fast-ai-imageclas/imagenette2-320.tgz
+  manifest_sources:
+    - path: imagenette2-320/train
+      role: train
+      prefix: train
+    - path: imagenette2-320/val
+      role: val
+      prefix: val
+  seed: 42
+
+splits:
+  full: data/imagenette/splits/full/train.csv
+  1pct: data/imagenette/splits/1pct/train.csv
+  3pct: data/imagenette/splits/3pct/train.csv
+  5pct: data/imagenette/splits/5pct/train.csv
+  10pct: data/imagenette/splits/10pct/train.csv
+  25pct: data/imagenette/splits/25pct/train.csv
+  50pct: data/imagenette/splits/50pct/train.csv
+  validation: data/imagenette/splits/val.csv
+  test: data/imagenette/splits/test.csv
+
+real_fractions:
+  - 0.01
+  - 0.03
+  - 0.05
+  - 0.10
+  - 0.25
+  - 0.50
+  - 1.00
+
+subset_strategy:
+  nested: true
+  stratified: true
+  minimum_samples_per_class: 1
+
+image:
+  size: 224
+  channels: 3
+
+normalization:
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]

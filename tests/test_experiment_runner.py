@@ -178,6 +178,68 @@ def test_model_recipe_merges_into_training():
     assert config["model"]["pretrained"] is False
 
 
+def test_download_and_extract_tgz(tmp_path):
+    import tarfile
+
+    from synthbench.provision import download_and_extract
+
+    src = _make_imagefolder(tmp_path / "src", {"train": 1})
+    archive = tmp_path / "bundle.tgz"
+    with tarfile.open(archive, "w:gz") as tar:
+        tar.add(src / "train", arcname="train")
+
+    dest = tmp_path / "out"
+    # file:// URL exercises the real download+extract path without a network.
+    download_and_extract(archive.as_uri(), dest)
+    assert (dest / "train").is_dir()
+    assert any((dest / "train").rglob("*.png"))
+
+
+def test_ensure_dataset_role_based_splits(tmp_path):
+    # Imagenette-style: use the dataset's own train/ and val/ folders directly.
+    root = tmp_path / "data" / "nette"
+    for split, count in (("train", 8), ("val", 3)):
+        for label in CLASSES:
+            directory = root / split / label
+            directory.mkdir(parents=True)
+            for index in range(count):
+                Image.new("RGB", (32, 32), color=(index * 9 % 255, 40, 90)).save(
+                    directory / f"{split}_{label}_{index}.png"
+                )
+    dataset_cfg = {
+        "name": "nette",
+        "task": "classification",
+        "num_classes": len(CLASSES),
+        "label_column": "label",
+        "data_root": str(root),
+        "image_root": str(root),
+        "splits": {
+            "full": str(root / "splits" / "full" / "train.csv"),
+            "validation": str(root / "splits" / "val.csv"),
+            "test": str(root / "splits" / "test.csv"),
+        },
+        "real_fractions": [0.5, 1.0],
+        "provision": {
+            "manifest_sources": [
+                {"path": "train", "role": "train", "prefix": "train"},
+                {"path": "val", "role": "val", "prefix": "val"},
+            ],
+            "seed": 42,
+        },
+    }
+    ensure_dataset(dataset_cfg)
+
+    full = pd.read_csv(root / "splits" / "full" / "train.csv")
+    val = pd.read_csv(root / "splits" / "val.csv")
+    test = pd.read_csv(root / "splits" / "test.csv")
+    assert len(full) == len(CLASSES) * 8  # entire train/ folder
+    assert len(val) == len(CLASSES) * 3  # entire val/ folder
+    # val doubles as test when no dedicated test source is given.
+    assert set(val["sample_id"]) == set(test["sample_id"])
+    # train and val come from different folders, so their samples never overlap.
+    assert not (set(full["sample_id"]) & set(val["sample_id"]))
+
+
 def test_ensure_dataset_without_provision_raises(tmp_path):
     dataset_cfg = {
         "name": "tiny",

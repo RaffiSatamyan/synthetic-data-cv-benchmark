@@ -120,6 +120,43 @@ def write_source_manifest(
     return destination
 
 
+def download_and_extract(
+    url: str, destination: str | Path, *, filename: str | None = None
+) -> Path:
+    """Download an archive from a direct URL and extract it into ``destination``.
+
+    Handles ``.zip`` and ``.tgz`` / ``.tar.gz`` / ``.tar`` (Imagenette ships as a
+    ``.tgz``). Idempotent: skips the download when the archive is already present.
+    Needs no credentials, so any machine with internet can provision this way.
+    """
+    import tarfile
+    import urllib.request
+    import zipfile
+
+    destination = Path(destination)
+    destination.mkdir(parents=True, exist_ok=True)
+    filename = filename or url.split("/")[-1].split("?")[0]
+    archive = destination / filename
+
+    if not archive.exists():
+        urllib.request.urlretrieve(url, archive)  # trusted dataset URL
+
+    lowered = filename.lower()
+    if lowered.endswith((".tgz", ".tar.gz", ".tar")):
+        mode = "r:gz" if lowered.endswith((".tgz", ".tar.gz")) else "r:"
+        with tarfile.open(archive, mode) as tar:
+            try:
+                tar.extractall(destination, filter="data")  # py3.12+ safe extraction
+            except TypeError:
+                tar.extractall(destination)
+    elif lowered.endswith(".zip"):
+        with zipfile.ZipFile(archive) as zipped:
+            zipped.extractall(destination)
+    else:
+        raise ValueError(f"Unsupported archive type for {filename}")
+    return destination
+
+
 def download_kaggle_dataset(
     slug: str, destination: str | Path, *, kind: str = "datasets", unzip: bool = True
 ) -> Path:
@@ -185,9 +222,12 @@ def ensure_dataset(dataset_cfg: dict[str, Any]) -> Path:
     # Download only if the image folders aren't already on disk (e.g. a Kaggle
     # notebook mounts them read-only, so nothing needs downloading).
     if not all(resolve_source_dir(source).exists() for source in sources):
+        url = provision.get("url")
         competition = provision.get("competition")
         kaggle = provision.get("kaggle")
-        if competition:
+        if url:
+            download_and_extract(url, data_root, filename=provision.get("filename"))
+        elif competition:
             download_kaggle_dataset(
                 competition, data_root, kind="competitions", unzip=provision.get("unzip", True)
             )
@@ -203,7 +243,7 @@ def ensure_dataset(dataset_cfg: dict[str, Any]) -> Path:
                 str(resolve_source_dir(s)) for s in sources if not resolve_source_dir(s).exists()
             ]
             raise FileNotFoundError(
-                f"Image sources not found and no 'competition'/'kaggle' download is "
+                f"Image sources not found and no 'url'/'competition'/'kaggle' download is "
                 f"configured for '{dataset_cfg.get('name')}': {missing}"
             )
 
@@ -211,6 +251,7 @@ def ensure_dataset(dataset_cfg: dict[str, Any]) -> Path:
     # splits are portable and can be committed once and reused on any machine.
     image_root = Path(dataset_cfg.get("image_root", data_root))
     frames: list[pd.DataFrame] = []
+    frames_by_role: dict[str, list[pd.DataFrame]] = {}
     for source in sources:
         directory = resolve_source_dir(source)
         absolute = bool(source.get("absolute", False))
@@ -237,6 +278,8 @@ def ensure_dataset(dataset_cfg: dict[str, Any]) -> Path:
                 f"folders, or set the source's 'absolute: true'. ({error})"
             ) from error
         frames.append(frame)
+        if source.get("role"):
+            frames_by_role.setdefault(str(source["role"]), []).append(frame)
     manifest = pd.concat(frames, ignore_index=True)
     manifest_path = write_source_manifest(manifest, data_root / "source_manifest.csv")
 
@@ -245,18 +288,29 @@ def ensure_dataset(dataset_cfg: dict[str, Any]) -> Path:
     class_list = sorted(manifest["label"].astype(str).unique())
     (data_root / "class_list.txt").write_text("\n".join(class_list) + "\n", encoding="utf-8")
 
-    # Delegate the deterministic train/val/test + nested-subset split to prepare_data.
     from synthbench.datasets import create_nested_subsets
 
-    _write_splits_from_manifest(
-        manifest,
-        data_root,
-        seed=int(provision.get("seed", 42)),
-        validation_fraction=float(provision.get("validation_fraction", 0.1)),
-        test_fraction=float(provision.get("test_fraction", 0.1)),
-        fractions=tuple(dataset_cfg.get("real_fractions", (0.01, 0.03, 0.05, 0.1, 0.25, 0.5, 1.0))),
-        create_nested_subsets=create_nested_subsets,
-    )
+    fractions = tuple(dataset_cfg.get("real_fractions", (0.01, 0.03, 0.05, 0.1, 0.25, 0.5, 1.0)))
+    seed = int(provision.get("seed", 42))
+    if frames_by_role:
+        # Role mode (e.g. Imagenette): use the dataset's own train/ and val/
+        # folders directly instead of carving. val doubles as the test set unless
+        # a 'test' role is given.
+        _write_role_splits(
+            frames_by_role, data_root, seed=seed, fractions=fractions,
+            create_nested_subsets=create_nested_subsets,
+        )
+    else:
+        # Pool-and-carve mode (e.g. ImageNet-100 from unlabelled competition val).
+        _write_splits_from_manifest(
+            manifest,
+            data_root,
+            seed=seed,
+            validation_fraction=float(provision.get("validation_fraction", 0.1)),
+            test_fraction=float(provision.get("test_fraction", 0.1)),
+            fractions=fractions,
+            create_nested_subsets=create_nested_subsets,
+        )
     if not full_split.exists():
         raise RuntimeError(
             f"Provisioning ran but {full_split} is still missing; built manifest at "
@@ -274,6 +328,46 @@ _FRACTION_NAMES = {
     0.5: "50pct",
     1.0: "full",
 }
+
+
+def _write_role_splits(
+    frames_by_role: dict[str, list[pd.DataFrame]],
+    data_root: Path,
+    *,
+    seed: int,
+    fractions: tuple[float, ...],
+    create_nested_subsets,
+) -> None:
+    """Assign splits from explicit source roles rather than carving them.
+
+    ``train`` sources become the training pool (and its nested subsets), ``val``
+    sources become the validation split, and ``test`` sources the test split. If
+    no ``test`` role is given, validation doubles as test.
+    """
+    if "train" not in frames_by_role:
+        raise ValueError("Role-based provisioning needs at least one source with role: train")
+
+    split_dir = data_root / "splits"
+    split_dir.mkdir(parents=True, exist_ok=True)
+
+    train = pd.concat(frames_by_role["train"], ignore_index=True)
+    validation = pd.concat(frames_by_role["val"], ignore_index=True) if "val" in frames_by_role else None
+    if "test" in frames_by_role:
+        test = pd.concat(frames_by_role["test"], ignore_index=True)
+    else:
+        test = validation  # val doubles as test when no dedicated test source
+    if validation is None:
+        raise ValueError("Role-based provisioning needs a source with role: val")
+
+    validation.to_csv(split_dir / "val.csv", index=False)
+    test.to_csv(split_dir / "test.csv", index=False)
+
+    subsets = create_nested_subsets(train, fractions=fractions, seed=seed, label_column="label")
+    for fraction, subset in subsets.items():
+        name = _FRACTION_NAMES.get(round(float(fraction), 2), f"f{int(fraction * 100)}")
+        destination = split_dir / name / "train.csv"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        subset.to_csv(destination, index=False)
 
 
 def _write_splits_from_manifest(
